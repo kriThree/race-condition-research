@@ -12,7 +12,6 @@ export const msgWrapper = (callback : (msg: any) => void) => {
             await mongoose.connection.close();
             process.exit(0);
         } else if (msg.type === 'connect') {
-            console.log(`Worker ${process.pid}: Connecting to MongoDB`);
             try {
                 await mongoose.connect(workerData.mongoUri, {
                     maxPoolSize: 3,
@@ -31,7 +30,6 @@ export const msgWrapper = (callback : (msg: any) => void) => {
                 });
 
                 // Сообщаем, что воркер готов
-                console.log("a")
                 parentPort?.postMessage({ type: 'ready' });
             } catch (err) {
                 console.error('Worker: MongoDB connection failed:', err);

@@ -20,125 +20,90 @@ export class CounterService {
     }
 
     async increment() {
-        await CounterModel.updateOne({ _id: "690a983797044ff4ddd56cbd" }, { $inc: { value: 1 } });
+        await CounterModel.updateOne({ _id: process.env.COUNTER_ID }, { $inc: { value: 1 } });
 
         this.logger.log(INFO_LEVEL, `успешная инкрементация`)
 
     }
     async get(): Promise<number> {
         this.logger.log(INFO_LEVEL, "Получение значения счетчика")
-        
+
         return (await CounterModel.findOne({}))?.value ?? 0;
 
     }
     async reset() {
         this.logger.log(INFO_LEVEL, "Сброс счетчика")
 
-        return await CounterModel.updateOne({ _id: "690a983797044ff4ddd56cbd" }, { $set: { value: 0 } });
+        return await CounterModel.updateOne({ _id: process.env.COUNTER_ID }, { $set: { value: 0 } });
     }
     async testRace(): Promise<TestRaceDto> {
-        this.logger.log("info", "Начало тестирования инкерментаций worker-ов")
+        this.logger.log(INFO_LEVEL, "Начало тестирования инкерментаций worker-ов")
 
-        const withoutProtectValue = await this.testRaceWithoutProtect();
-        const atomicValue = await this.testAtomic();
-        const optimisticValue = await this.testOptimistic();
-
-        return new TestRaceDto(withoutProtectValue, atomicValue, optimisticValue)
-
-    }
-
-    async testRaceWithoutProtect(): Promise<number> {
         this.logger.log(INFO_LEVEL, "Начало тестирования инкерментации worker-ов без защиты")
-      
+        const withoutProtectValue = await this.testTemplate("C:/Users/kriThree/Desktop/projects/test/race-condition/race/src/counter/increments/increment.race.ts");
+        this.logger.log(INFO_LEVEL, "Начало тестирования инкерментации worker-ов с атомарными операциями")
+        const atomicValue = await this.testTemplate("C:/Users/kriThree/Desktop/projects/test/race-condition/race/src/counter/increments/increment.atomic.ts");
+        this.logger.log(INFO_LEVEL, "Начало тестирования инкерментации worker-ов с оптимистичными операциями")
+        const optimisticValue = await this.testTemplate("C:/Users/kriThree/Desktop/projects/test/race-condition/race/src/counter/increments/increment.optimistic.ts");
+        this.logger.log(INFO_LEVEL, "Конец тестирования инкерментации worker-ов с пессимистичными операциями")
+        const pesimisticValue = await this.testTemplate("C:/Users/kriThree/Desktop/projects/test/race-condition/race/src/counter/increments/increment.pesimistic.ts");
+
+
+        return new TestRaceDto(withoutProtectValue, atomicValue, optimisticValue, pesimisticValue);
+
+    }
+
+    async testTemplate(path: string): Promise<number> {
+
         await this.reset();
 
-        const worker = new WorkerManager(
-            "C:/Users/kriThree/Desktop/projects/test/race-condition/race/src/counter/increments/increment.race.ts",
+        const manager = new WorkerManager(
+            path,
             process.env.MONGODB_URI,
             3,
-            this.logger
+            this.logger,
+            true
         );
-        await worker.connect()
+        this.logger.log(INFO_LEVEL, "Создание worker-ов")
+        await manager.connect()
 
+        this.logger.log(INFO_LEVEL, "Запуск задач")
         const startTime = Date.now();
+
         const tasks: Promise<any>[] = [];
         for (let i = 0; i < 1000; i++) {
-            const taskPromise = worker.runTask({ id: "690a983797044ff4ddd56cbd" })
+            const taskPromise = manager.runTask({ id: process.env.COUNTER_ID })
             tasks.push(taskPromise);
         }
-
         try {
             await Promise.all(tasks);
         } catch (error) {
             console.error('Some tasks failed:', error);
         }
 
-        const finalDoc = await this.get();
-        await worker.destroy();
-        await this.reset();
+        const duration = Date.now() - startTime;
 
-        return finalDoc
-
-    }
-
-    async testAtomic(): Promise<number> {
-        await this.reset();
-
-        const worker = new WorkerManager(
-            "C:/Users/kriThree/Desktop/projects/test/race-condition/race/src/counter/increments/increment.atomic.ts",
-            process.env.MONGODB_URI,
-            3,
-            this.logger
-        );
-        await worker.connect()
-
-        const startTime = Date.now();
-        const tasks: Promise<any>[] = [];
-        for (let i = 0; i < 1000; i++) {
-            const taskPromise = worker.runTask({ id: "690a983797044ff4ddd56cbd" })
-            tasks.push(taskPromise);
-        }
-
-        try {
-            await Promise.all(tasks);
-        } catch (error) {
-            console.error('Some tasks failed:', error);
-        }
+        this.logger.log(INFO_LEVEL, `Время выполнения: ${duration} ms`);
 
         const finalDoc = await this.get();
-        await worker.destroy();
+
+        manager.tasksStats.forEach((value, key) => {
+            this.logger.log(INFO_LEVEL, `worker ${key} инкрементов: ${value}`)
+        })
+        if (manager.meta){
+            this.logger.log(INFO_LEVEL, `количество повторных попыток: ${manager.meta.retryCount}`)
+        }
+
+        this.logger.log(INFO_LEVEL, `Итог инкрементации ${finalDoc}` )
+
+        this.logger.log(INFO_LEVEL, `Процент потерь при работе воркеров ${100 - finalDoc / 1000 * 100}%`, )
+
+
+        await manager.destroy();
         await this.reset();
 
         return finalDoc
     }
-    async testOptimistic(): Promise<number> {
 
-        await this.reset();
-
-        const worker = new WorkerManager(
-            "C:/Users/kriThree/Desktop/projects/test/race-condition/race/src/counter/increments/increment.optimistic.ts",
-            process.env.MONGODB_URI,
-            3,
-            this.logger
-        );
-        await worker.connect()
-        const startTime = Date.now();
-        const tasks: Promise<any>[] = [];
-        for (let i = 0; i < 1000; i++) {
-            const taskPromise = worker.runTask({ id: "690a983797044ff4ddd56cbd" })
-            if (i % 100 === 0) console.log(i)
-            tasks.push(taskPromise);
-        }
-        try {
-            await Promise.all(tasks);
-        } catch (error) {
-            console.log(error)
-        }
-        const finalDoc = await this.get();
-        await worker.destroy();
-        await this.reset();
-
-        return finalDoc
-    }
 }
 

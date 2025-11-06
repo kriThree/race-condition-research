@@ -2,13 +2,19 @@ import { parentPort } from "worker_threads";
 import { msgWrapper } from "./workerThreadsManager.async";
 import { CounterModel } from "../counter.schema";
 
-parentPort?.on('message', async (msg) => {
-    msgWrapper(
-        async (msg: any) => {
-            const maxRetries = 10;
-            const lockTimeout = 5000; // 5 секунд
+let retryCount = 0
 
-            for (let attempt = 0; attempt < maxRetries; attempt++) {
+parentPort?.on('message', async (msg) => {
+    msgWrapper(async (msg: any) => {
+        const maxRetries = 25;
+        const lockTimeout = 5000;
+        let backoff = 10;
+
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                if (attempt > 0) {
+                    retryCount++;
+                }
                 const locked = await CounterModel.findOneAndUpdate(
                     {
                         _id: msg.data.id,
@@ -30,21 +36,43 @@ parentPort?.on('message', async (msg) => {
                     { new: true }
                 );
 
-                if (!locked) {
-                    await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
-                    continue;
+                if (locked) {
+                    try {
+                        locked.value += 1;
+                        await locked.save();
+
+                        return parentPort?.postMessage({
+                            success: true,
+                            data: locked.toObject(),
+                            attempts: attempt + 1,
+                            meta: { retryCount }
+                        });
+
+                    } finally {
+                        await CounterModel.findByIdAndUpdate(msg.data.id, {
+                            $set: { isLocked: false, lockedBy: null }
+                        });
+
+                        await new Promise(r => setTimeout(r, Math.random() * 10));
+                    }
                 }
 
-                try {
-                    locked.value += 1;
-                    await locked.save();
-                    return locked;
-                } finally {
-                    await CounterModel.findByIdAndUpdate(msg.data.id, {
-                        $set: { isLocked: false }
-                    });
-                }
+                const jitter = Math.random() * backoff * 0.3;
+                await new Promise(r => setTimeout(r, backoff + jitter));
+                backoff = Math.min(backoff * 1.5, 200);
+
+            } catch (err) {
+
+                await new Promise(r => setTimeout(r, backoff));
+                backoff = Math.min(backoff * 1.5, 200);
             }
         }
-    )(msg);
-})
+
+        parentPort?.postMessage({
+            success: false,
+            error: 'Failed to acquire lock after max retries',
+            attempts: maxRetries
+        });
+
+    })(msg);
+});

@@ -2,10 +2,6 @@ import { model, Schema } from 'mongoose';
 
 export const CounterSchema = new Schema(
     {
-        id: {
-            type: Number,
-            required: true
-        },
         name: {
             type: String,
             required: true
@@ -30,13 +26,12 @@ export const CounterSchema = new Schema(
         lockedAt: {
             type : Date,
             default: null,
-            required: true 
+            required: false 
         }
     }
 )
 
 export class Counter {
-    id: number;
     name: string;
     value: number;
     version: number;

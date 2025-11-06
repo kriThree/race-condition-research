@@ -2,6 +2,17 @@ import { parentPort, Worker } from "worker_threads";
 import os from "os";
 import comlink from "comlink"
 import { randomUUID } from "crypto";
+import { Logger } from "@nestjs/common";
+import { log } from "console";
+import { INFO_LEVEL } from "src/config/logger.config";
+
+export class WorkerContext {
+    constructor(
+        public index: number,
+        public id: string,
+        public mongoUri: string,
+    ) { }
+}
 
 export class WorkerManager {
     private pool: Worker[] = []
@@ -11,30 +22,36 @@ export class WorkerManager {
         resolve: (value: any) => void;
         reject: (error: any) => void;
     }> = [];
+    public tasksStats: Map<number, number> = new Map();
+    public meta: any
     constructor(
         private path,
         private mongoUri,
         private poolSize,
-        private logger
+        private logger,
+        private giveStats = false
+
     ) {
 
     }
     async connect() {
         const promises: Promise<any>[] = [];
-
         for (let i = 0; i < this.poolSize; i++) {
             promises.push(this.createWorker(i));
         }
 
         await Promise.all(promises);
-        console.log(`✓ ${this.poolSize} workers ready`);
+
     }
     createWorker(index: number) {
         return new Promise((resolve, reject) => {
 
+
+            this.tasksStats.set(index, 0);
+
             const worker = new Worker(this.path, {
                 execArgv: ['-r', 'ts-node/register'],
-                workerData: { mongoUri: this.mongoUri, id: randomUUID() }
+                workerData: new WorkerContext(index, randomUUID(), this.mongoUri),
             });
 
             const readyHandler = (msg: any) => {
@@ -64,14 +81,15 @@ export class WorkerManager {
             worker.once('error', errorHandler);
 
             worker.postMessage({ type: 'connect' });
-
-            resolve(1);
         })
     }
 
     private handleResult(workerIndex: number, result: any) {
         this.available.push(workerIndex);
-
+        if (result.meta) this.meta = result.meta
+        if (this.giveStats) {
+            this.tasksStats.set(workerIndex, (this.tasksStats.get(workerIndex) || 0) + 1);
+        }
         this.processQueue();
     }
 
@@ -107,22 +125,6 @@ export class WorkerManager {
         });
     }
 
-    async runAll(tasks) {
-        const results: any[] = [];
-        const running: Promise<any>[] = [];
-
-        for (const task of tasks) {
-            const promise = this.runTask(task);
-            running.push(promise);
-
-            if (running.length >= 3) {
-                results.push(await Promise.race(running));
-            }
-        }
-
-        results.push(...(await Promise.all(running)));
-        return results;
-    }
     async destroy() {
         await Promise.all(
             this.pool.map(worker => worker.terminate())

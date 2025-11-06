@@ -14,10 +14,6 @@ const customFormat = winston.format.combine(
 const consoleFormat = winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.ms(),
-    nestWinstonModuleUtilities.format.nestLike('MyApp', {
-        colors: true,
-        prettyPrint: true,
-    })
 );
 
 export const INFO_LEVEL = 'info';
@@ -36,7 +32,7 @@ export const winstonConfig = {
     transports: [
         new winston.transports.Console({
             format: consoleFormat,
-            level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+            level: 'debug'
         }),
 
         new winston.transports.File({
@@ -45,6 +41,7 @@ export const winstonConfig = {
             maxsize: 10485760,
             maxFiles: 5,
             tailable: true,
+            level: 'debug' 
         }),
 
         new winston.transports.File({
